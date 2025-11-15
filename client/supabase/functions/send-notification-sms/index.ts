@@ -78,9 +78,9 @@ serve(async (req) => {
 
       if (!channels.includes("sms")) continue;
 
-      const profile = recipient.profiles as
+      const profile:
         | { phone_e164?: string; phone_verified?: boolean }
-        | undefined;
+        | undefined = recipient.profiles;
 
       if (!profile?.phone_verified || !profile?.phone_e164) {
         console.log(
