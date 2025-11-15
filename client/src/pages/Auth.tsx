@@ -21,12 +21,15 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { Bell } from "lucide-react";
 
+type Role = "parent" | "teacher" | "admin";
+
 const Auth = () => {
-  const [isLogin, setIsLogin] = useState(true);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"parent" | "teacher" | "admin">("parent");
-  const [loading, setLoading] = useState(false);
+  const [isLogin, setIsLogin] = useState<boolean>(true);
+  const [email, setEmail] = useState<string>("");
+  const [password, setPassword] = useState<string>("");
+  const [phoneNumber, setPhoneNumber] = useState<string>("");
+  const [role, setRole] = useState<Role>("parent");
+  const [loading, setLoading] = useState<boolean>(false);
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -38,7 +41,7 @@ const Auth = () => {
     });
   }, [navigate]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoading(true);
 
@@ -57,7 +60,7 @@ const Auth = () => {
         });
         navigate("/dashboard");
       } else {
-        const { error } = await supabase.auth.signUp({
+        const { data: authData, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
@@ -70,6 +73,18 @@ const Auth = () => {
 
         if (error) throw error;
 
+        // Update profile with phone number if provided
+        if (phoneNumber && authData.user) {
+          const { error: updateError } = await supabase
+            .from("profiles")
+            .update({ phone_e164: phoneNumber })
+            .eq("id", authData.user.id);
+
+          if (updateError) {
+            console.error("Error updating phone:", updateError);
+          }
+        }
+
         toast({
           title: "Account created!",
           description: "You can now log in with your credentials.",
@@ -77,9 +92,8 @@ const Auth = () => {
         setIsLogin(true);
       }
     } catch (error: unknown) {
-      let message = "An unexpected error occurred.";
-      if (error instanceof Error) message = error.message;
-
+      const message =
+        error instanceof Error ? error.message : "An unknown error occurred";
       toast({
         title: "Error",
         description: message,
@@ -128,24 +142,37 @@ const Auth = () => {
               />
             </div>
             {!isLogin && (
-              <div className="space-y-2">
-                <Label htmlFor="role">Role</Label>
-                <Select
-                  value={role}
-                  onValueChange={(v: "parent" | "teacher" | "admin") =>
-                    setRole(v)
-                  }
-                >
-                  <SelectTrigger id="role">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="parent">Parent</SelectItem>
-                    <SelectItem value="teacher">Teacher</SelectItem>
-                    <SelectItem value="admin">Admin</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="phone">Phone Number (optional)</Label>
+                  <Input
+                    id="phone"
+                    type="tel"
+                    placeholder="+1234567890"
+                    value={phoneNumber}
+                    onChange={(e) => setPhoneNumber(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Include country code (e.g., +1 for US, +63 for Philippines)
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="role">Role</Label>
+                  <Select
+                    value={role}
+                    onValueChange={(value: Role) => setRole(value)}
+                  >
+                    <SelectTrigger id="role">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="parent">Parent</SelectItem>
+                      <SelectItem value="teacher">Teacher</SelectItem>
+                      <SelectItem value="admin">Admin</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Loading..." : isLogin ? "Sign In" : "Sign Up"}

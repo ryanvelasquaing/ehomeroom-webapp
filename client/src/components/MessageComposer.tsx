@@ -22,6 +22,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { Send, Loader2 } from "lucide-react";
 
+// Import your generated Database type (adjust path if needed)
+import type { Database } from "@/integrations/supabase/types";
+
 interface MessageComposerProps {
   senderId: string;
   senderRole: string;
@@ -30,12 +33,24 @@ interface MessageComposerProps {
 type AudienceType = "all" | "role" | "class" | "individual";
 type Role = "admin" | "parent" | "teacher";
 
-const MessageComposer = ({ senderId, senderRole }: MessageComposerProps) => {
+// Derive table types from generated Database
+type MessagesTable = Database["public"]["Tables"]["messages"];
+type MessageInsert = MessagesTable["Insert"];
+type MessageRow = MessagesTable["Row"];
+
+type MessageRecipientsTable =
+  Database["public"]["Tables"]["message_recipients"];
+type MessageRecipientInsert = MessageRecipientsTable["Insert"];
+
+type ProfilesTable = Database["public"]["Tables"]["profiles"];
+type ProfileRow = ProfilesTable["Row"];
+
+const MessageComposer = ({ senderId }: MessageComposerProps) => {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [link, setLink] = useState("");
   const [audienceType, setAudienceType] = useState<AudienceType>("all");
-  const [audienceFilter, setAudienceFilter] = useState<string>("");
+  const [audienceFilter, setAudienceFilter] = useState("");
   const [channels, setChannels] = useState<string[]>(["push", "email"]);
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
@@ -70,52 +85,75 @@ const MessageComposer = ({ senderId, senderRole }: MessageComposerProps) => {
     setLoading(true);
 
     try {
-      // Create the message
+      // Build payload according to generated Insert type
+      const messagePayload: MessageInsert = {
+        // common fields; some properties may be optional in your generated types
+        sender_id: senderId,
+        title,
+        body,
+        link: link || null,
+        audience_type: audienceType,
+        audience_filter: audienceFilter ? { value: audienceFilter } : null,
+        channels,
+        sent_at: new Date().toISOString(),
+      } as unknown as MessageInsert; // cast only if necessary to satisfy strict Insert shape
+
       const { data: message, error: messageError } = await supabase
         .from("messages")
-        .insert({
-          sender_id: senderId,
-          title,
-          body,
-          link: link || null,
-          audience_type: audienceType,
-          audience_filter: audienceFilter ? { value: audienceFilter } : null,
-          channels,
-          sent_at: new Date().toISOString(),
-        })
+        .insert(messagePayload)
         .select()
         .single();
 
       if (messageError) throw messageError;
+      if (!message) throw new Error("Message creation failed");
 
-      // Fetch recipients based on audience
+      // collect recipient IDs
       let recipientIds: string[] = [];
 
       if (audienceType === "all") {
-        const { data: profiles } = await supabase.from("profiles").select("id");
-        recipientIds = profiles?.map((p) => p.id) || [];
-      } else if (audienceType === "role" && audienceFilter) {
-        const { data: profiles } = await supabase
+        const { data: profiles, error } = await supabase
           .from("profiles")
-          .select("id")
+          .select<keyof ProfileRow, ProfileRow>("id");
+        if (error) throw error;
+        recipientIds = (profiles ?? []).map((p) => p.id);
+      } else if (audienceType === "role" && audienceFilter) {
+        const { data: profiles, error } = await supabase
+          .from("profiles")
+          .select<keyof ProfileRow, ProfileRow>("id")
           .eq("role", audienceFilter as Role);
-        recipientIds = profiles?.map((p) => p.id) || [];
+        if (error) throw error;
+        recipientIds = (profiles ?? []).map((p) => p.id);
       }
 
-      // Create recipient records
+      // create message_recipients records if any
       if (recipientIds.length > 0) {
-        const recipients = recipientIds.map((userId) => ({
-          message_id: message.id,
-          user_id: userId,
-          channels_attempted: channels,
-          status: "pending",
-        }));
+        const recipients: MessageRecipientInsert[] = recipientIds.map(
+          (userId) =>
+            ({
+              message_id: (message as MessageRow).id,
+              user_id: userId,
+              channels_attempted: channels,
+              status: "pending",
+            } as unknown as MessageRecipientInsert)
+        );
 
         const { error: recipientError } = await supabase
           .from("message_recipients")
           .insert(recipients);
 
         if (recipientError) throw recipientError;
+
+        // example: invoke edge function to handle SMS (optional)
+        if (channels.includes("sms")) {
+          try {
+            await supabase.functions.invoke("send-notification-sms", {
+              body: { messageId: (message as MessageRow).id },
+            });
+            console.log("SMS delivery triggered");
+          } catch (smsError) {
+            console.error("SMS delivery error:", smsError);
+          }
+        }
       }
 
       toast({
@@ -123,7 +161,7 @@ const MessageComposer = ({ senderId, senderRole }: MessageComposerProps) => {
         description: `Your message has been queued for delivery to ${recipientIds.length} recipients.`,
       });
 
-      // Reset form
+      // reset form
       setTitle("");
       setBody("");
       setLink("");
@@ -140,7 +178,7 @@ const MessageComposer = ({ senderId, senderRole }: MessageComposerProps) => {
       } else {
         toast({
           title: "Error sending message",
-          description: "An unknown error occurred",
+          description: "Unknown error occurred",
           variant: "destructive",
         });
       }
@@ -232,36 +270,22 @@ const MessageComposer = ({ senderId, senderRole }: MessageComposerProps) => {
         <div className="space-y-2">
           <Label>Delivery Channels</Label>
           <div className="flex flex-col gap-2">
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="push"
-                checked={channels.includes("push")}
-                onCheckedChange={() => handleChannelToggle("push")}
-              />
-              <label htmlFor="push" className="text-sm cursor-pointer">
-                Push Notification
-              </label>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="sms"
-                checked={channels.includes("sms")}
-                onCheckedChange={() => handleChannelToggle("sms")}
-              />
-              <label htmlFor="sms" className="text-sm cursor-pointer">
-                SMS (requires verified phone)
-              </label>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="email"
-                checked={channels.includes("email")}
-                onCheckedChange={() => handleChannelToggle("email")}
-              />
-              <label htmlFor="email" className="text-sm cursor-pointer">
-                Email
-              </label>
-            </div>
+            {["push", "sms", "email"].map((channel) => (
+              <div key={channel} className="flex items-center space-x-2">
+                <Checkbox
+                  id={channel}
+                  checked={channels.includes(channel)}
+                  onCheckedChange={() => handleChannelToggle(channel)}
+                />
+                <label htmlFor={channel} className="text-sm cursor-pointer">
+                  {channel === "push"
+                    ? "Push Notification"
+                    : channel === "sms"
+                    ? "SMS (requires verified phone)"
+                    : "Email"}
+                </label>
+              </div>
+            ))}
           </div>
         </div>
 

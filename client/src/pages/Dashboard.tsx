@@ -1,31 +1,28 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
-import type { Database } from "@/integrations/supabase/types";
+import { supabase, type Profile } from "@/lib/supabase";
 import { User } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { LogOut, Bell, Send, Users } from "lucide-react";
+import { LogOut, Bell, Send, Users, Phone } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import MessageComposer from "@/components/MessageComposer";
 import NotificationCenter from "@/components/NotificationCenter";
 import AdminPanel from "@/components/AdminPanel";
-
-// Type helper for the profiles table
-type Profile = Database["public"]["Tables"]["profiles"]["Row"];
+import PhoneVerification from "@/components/PhoneVerification";
 
 const Dashboard = () => {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [userRole, setUserRole] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // Listen for auth state changes
   useEffect(() => {
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_, session) => {
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       if (!session) navigate("/auth");
     });
@@ -38,23 +35,27 @@ const Dashboard = () => {
     return () => subscription.unsubscribe();
   }, [navigate]);
 
-  // Fetch profile from Supabase
   const fetchProfile = useCallback(async () => {
-    if (!user?.id) return;
-
+    if (!user) return;
+    setLoading(true);
     try {
       const { data, error } = await supabase
         .from("profiles")
         .select("*")
         .eq("id", user.id)
         .single();
-
       if (error) throw error;
       setProfile(data);
-    } catch (error: unknown) {
-      let message = "Failed to load profile";
-      if (error instanceof Error) message = error.message;
 
+      const { data: roleData } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", user.id)
+        .single();
+      setUserRole(roleData?.role || null);
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Failed to load profile";
       toast({
         title: "Error",
         description: message,
@@ -66,10 +67,9 @@ const Dashboard = () => {
   }, [user, toast]);
 
   useEffect(() => {
-    fetchProfile();
-  }, [fetchProfile]);
+    if (user) fetchProfile();
+  }, [user, fetchProfile]);
 
-  // Logout handler
   const handleLogout = async () => {
     await supabase.auth.signOut();
     navigate("/auth");
@@ -87,8 +87,7 @@ const Dashboard = () => {
     );
   }
 
-  const isAdminOrTeacher =
-    profile?.role === "admin" || profile?.role === "teacher";
+  const isAdminOrTeacher = userRole === "admin" || userRole === "teacher";
 
   return (
     <div className="min-h-screen bg-background">
@@ -101,7 +100,7 @@ const Dashboard = () => {
             <div>
               <h1 className="text-xl font-bold">School Announcements</h1>
               <p className="text-sm text-muted-foreground">
-                {profile?.email} • {profile?.role}
+                {profile?.email} {userRole && `• ${userRole}`}
               </p>
             </div>
           </div>
@@ -114,10 +113,18 @@ const Dashboard = () => {
 
       <main className="container mx-auto px-4 py-8">
         <Tabs defaultValue="notifications" className="space-y-6">
-          <TabsList className="grid w-full max-w-md mx-auto grid-cols-3">
+          <TabsList
+            className={`grid w-full max-w-md mx-auto ${
+              isAdminOrTeacher ? "grid-cols-4" : "grid-cols-2"
+            }`}
+          >
             <TabsTrigger value="notifications">
               <Bell className="w-4 h-4 mr-2" />
               Notifications
+            </TabsTrigger>
+            <TabsTrigger value="phone">
+              <Phone className="w-4 h-4 mr-2" />
+              Phone
             </TabsTrigger>
             {isAdminOrTeacher && (
               <>
@@ -134,13 +141,27 @@ const Dashboard = () => {
           </TabsList>
 
           <TabsContent value="notifications" className="space-y-4">
-            <NotificationCenter userId={user.id} />
+            <NotificationCenter userId={user?.id || ""} />
+          </TabsContent>
+
+          <TabsContent value="phone" className="space-y-4">
+            <PhoneVerification
+              userId={user?.id || ""}
+              currentPhone={profile?.phone_e164 || null}
+              isVerified={profile?.phone_verified || false}
+              onVerified={fetchProfile}
+            />
           </TabsContent>
 
           {isAdminOrTeacher && (
             <>
               <TabsContent value="compose" className="space-y-4">
-                <MessageComposer senderId={user.id} senderRole={profile.role} />
+                <MessageComposer
+                  senderId={user?.id || ""}
+                  senderRole={
+                    (userRole as "parent" | "teacher" | "admin") || "parent"
+                  }
+                />
               </TabsContent>
               <TabsContent value="admin" className="space-y-4">
                 <AdminPanel />
