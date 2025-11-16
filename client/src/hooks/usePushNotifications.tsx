@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
+import { requestFCMToken, initializeFirebase } from "@/lib/firebase";
 
 export const usePushNotifications = (userId: string | undefined) => {
   const [permission, setPermission] =
@@ -15,6 +16,9 @@ export const usePushNotifications = (userId: string | undefined) => {
     if ("Notification" in window) {
       setPermission(Notification.permission);
     }
+
+    // Initialize Firebase
+    initializeFirebase();
   }, []);
 
   const requestPermission = async () => {
@@ -25,20 +29,27 @@ export const usePushNotifications = (userId: string | undefined) => {
       setPermission(permission);
 
       if (permission === "granted") {
-        // Register service worker
-        const registration = await navigator.serviceWorker.register("/sw.js");
-        await navigator.serviceWorker.ready;
+        // Send Firebase config to service worker
+        const firebaseConfigStr = import.meta.env.VITE_FIREBASE_CONFIG;
+        if (firebaseConfigStr && "serviceWorker" in navigator) {
+          const registration = await navigator.serviceWorker.register(
+            "/firebase-messaging-sw.js"
+          );
+          await navigator.serviceWorker.ready;
 
-        // Subscribe to push notifications
-        const subscription = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(
-            import.meta.env.VITE_VAPID_PUBLIC_KEY || ""
-          ),
-        });
+          registration.active?.postMessage({
+            type: "FIREBASE_CONFIG",
+            config: firebaseConfigStr,
+          });
+        }
 
-        // Save FCM token to database
-        const token = JSON.stringify(subscription);
+        // Get FCM token
+        const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
+        const token = await requestFCMToken(vapidKey);
+
+        if (!token) {
+          throw new Error("Failed to get FCM token");
+        }
 
         // Check if token already exists
         const { data: existingToken } = await supabase
@@ -76,15 +87,3 @@ export const usePushNotifications = (userId: string | undefined) => {
     requestPermission,
   };
 };
-
-// Helper function to convert VAPID key
-function urlBase64ToUint8Array(base64String: string) {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}
